@@ -10,9 +10,9 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 LOG_CHANNEL_ID = 1538123620193280021
 DATA_FILE = "data.json"
 
-# =========================
+# ==========================================
 # 商店
-# =========================
+# ==========================================
 
 SHOP_ITEMS = {
     "skinbox": {
@@ -29,24 +29,21 @@ SHOP_ITEMS = {
     }
 }
 
-# =========================
-# 抽獎
-# =========================
-
-SINGLE_COST = 100
-TEN_COST = 950
+# ==========================================
+# 抽獎獎池
+# ==========================================
 
 PRIZES = [
-    ("💰 10 D", 40),
-    ("💰 110 D", 30),
-    ("💎 200 D", 20),
-    ("🎁 皮膚箱 ×1", 9),
-    ("👑 超大獎：任意 1000 R 商品", 1)
+    ("💰 10 D", 60.0),
+    ("💰 110 D", 30.0),
+    ("💎 200 D", 9.0),
+    ("🎁 皮膚箱 ×1", 0.9),
+    ("👑 任意 1000 R 商品", 0.1)
 ]
 
-# =========================
+# ==========================================
 # 資料庫
-# =========================
+# ==========================================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -55,7 +52,7 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 
@@ -72,19 +69,24 @@ def ensure_user(user_id):
 
     if user_id not in data:
         data[user_id] = {
-            "balance": 0
+            "balance": 0,
+            "tickets": 0
         }
         save_data()
 
+    # 相容舊版只有數字的資料
     if isinstance(data[user_id], int):
         data[user_id] = {
-            "balance": data[user_id]
+            "balance": data[user_id],
+            "tickets": 0
         }
         save_data()
 
     if "balance" not in data[user_id]:
         data[user_id]["balance"] = 0
-        save_data()
+
+    if "tickets" not in data[user_id]:
+        data[user_id]["tickets"] = 0
 
     return data[user_id]
 
@@ -110,9 +112,30 @@ def remove_d(user_id, amount):
     return True
 
 
-# =========================
+def get_tickets(user_id):
+    return ensure_user(user_id)["tickets"]
+
+
+def add_tickets(user_id, amount):
+    user = ensure_user(user_id)
+    user["tickets"] += amount
+    save_data()
+
+
+def remove_tickets(user_id, amount):
+    user = ensure_user(user_id)
+
+    if user["tickets"] < amount:
+        return False
+
+    user["tickets"] -= amount
+    save_data()
+    return True
+
+
+# ==========================================
 # Bot
-# =========================
+# ==========================================
 
 intents = discord.Intents.default()
 
@@ -125,13 +148,14 @@ bot = commands.Bot(
 @bot.event
 async def on_ready():
     await bot.tree.sync()
+
     print(f"Bot 已登入：{bot.user}")
     print("D Coin Bot 已啟動")
 
 
-# =========================
-# 紀錄
-# =========================
+# ==========================================
+# 紀錄頻道
+# ==========================================
 
 async def send_log(message):
     try:
@@ -142,18 +166,18 @@ async def send_log(message):
         print("✅ 抽獎紀錄已發送")
 
     except discord.Forbidden:
-        print("❌ Bot 沒有這個頻道的發送訊息權限")
+        print("❌ Bot 沒有發送訊息權限")
 
     except discord.NotFound:
-        print("❌ 找不到這個頻道")
+        print("❌ 找不到紀錄頻道")
 
     except Exception as error:
         print(f"❌ 發送紀錄失敗：{error}")
 
 
-# =========================
-# 抽獎機率
-# =========================
+# ==========================================
+# 抽獎
+# ==========================================
 
 def draw_prize():
     roll = random.uniform(0, 100)
@@ -168,22 +192,20 @@ def draw_prize():
     return PRIZES[-1][0]
 
 
-def prize_d_amount(prize):
+def give_prize(user_id, prize):
     if prize == "💰 10 D":
-        return 10
+        add_d(user_id, 10)
 
-    if prize == "💰 110 D":
-        return 110
+    elif prize == "💰 110 D":
+        add_d(user_id, 110)
 
-    if prize == "💎 200 D":
-        return 200
-
-    return 0
+    elif prize == "💎 200 D":
+        add_d(user_id, 200)
 
 
-# =========================
+# ==========================================
 # /balance
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="balance",
@@ -199,9 +221,27 @@ async def balance(interaction: discord.Interaction):
     )
 
 
-# =========================
+# ==========================================
+# /tickets
+# ==========================================
+
+@bot.tree.command(
+    name="tickets",
+    description="查看自己的抽獎券"
+)
+async def tickets(interaction: discord.Interaction):
+
+    amount = get_tickets(interaction.user.id)
+
+    await interaction.response.send_message(
+        f"🎟️ {interaction.user.mention}\n"
+        f"你目前擁有 **{amount} 張抽獎券**"
+    )
+
+
+# ==========================================
 # /addd
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="addd",
@@ -249,9 +289,9 @@ async def addd(
     )
 
 
-# =========================
+# ==========================================
 # /removed
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="removed",
@@ -304,17 +344,71 @@ async def removed(
     )
 
 
-# =========================
-# 抽獎按鈕
-# =========================
+# ==========================================
+# /addticket
+# ==========================================
+
+@bot.tree.command(
+    name="addticket",
+    description="管理員發放抽獎券"
+)
+@app_commands.describe(
+    member="成員",
+    amount="抽獎券數量"
+)
+async def addticket(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: int
+):
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ 只有管理員可以使用。",
+            ephemeral=True
+        )
+        return
+
+    if amount <= 0:
+        await interaction.response.send_message(
+            "❌ 數量必須大於 0。",
+            ephemeral=True
+        )
+        return
+
+    add_tickets(member.id, amount)
+
+    new_amount = get_tickets(member.id)
+
+    await interaction.response.send_message(
+        f"🎟️ 已給 {member.mention} **{amount} 張抽獎券**\n"
+        f"🎟️ 目前：**{new_amount} 張**"
+    )
+
+    await send_log(
+        f"🎟️ **抽獎券發放紀錄**\n"
+        f"👤 成員：{member.mention}\n"
+        f"👮 操作者：{interaction.user.mention}\n"
+        f"➕ 發放：**{amount} 張**\n"
+        f"🎟️ 剩餘：**{new_amount} 張**"
+    )
+
+
+# ==========================================
+# 抽獎面板
+# ==========================================
 
 class LotteryView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
 
+    # --------------------------------------
+    # 單抽
+    # --------------------------------------
+
     @discord.ui.button(
-        label="單抽 100 D",
+        label="單抽",
         emoji="🎟️",
         style=discord.ButtonStyle.primary,
         custom_id="lottery_single"
@@ -325,49 +419,50 @@ class LotteryView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        if not remove_d(
-            interaction.user.id,
-            SINGLE_COST
-        ):
+        user_id = interaction.user.id
+
+        if get_tickets(user_id) < 1:
+
             await interaction.response.send_message(
-                f"❌ D 幣不足！\n"
-                f"需要：**{SINGLE_COST} D**\n"
-                f"目前：**{get_balance(interaction.user.id)} D**",
+                "❌ 你沒有抽獎券！",
                 ephemeral=True
             )
+
             return
+
+        remove_tickets(user_id, 1)
 
         prize = draw_prize()
 
-        reward = prize_d_amount(prize)
+        give_prize(user_id, prize)
 
-        if reward > 0:
-            add_d(
-                interaction.user.id,
-                reward
-            )
+        remaining = get_tickets(user_id)
 
-        remaining = get_balance(
-            interaction.user.id
-        )
+        balance = get_balance(user_id)
 
         await interaction.response.send_message(
             f"🎰 **抽獎結果**\n\n"
-            f"🎁 {prize}\n\n"
-            f"💰 剩餘：**{remaining:,} D**"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎁 結果：**{prize}**\n\n"
+            f"🎟️ 剩餘抽獎券：**{remaining}**\n"
+            f"💰 D 幣：**{balance:,} D**"
         )
 
         await send_log(
             f"🎰 **單抽紀錄**\n"
             f"👤 玩家：{interaction.user.mention}\n"
-            f"💰 花費：**100 D**\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
             f"🎁 結果：**{prize}**\n"
-            f"💰 剩餘：**{remaining:,} D**"
+            f"🎟️ 剩餘抽獎券：**{remaining}**\n"
+            f"💰 D 幣：**{balance:,} D**"
         )
 
+    # --------------------------------------
+    # 十連抽
+    # --------------------------------------
 
     @discord.ui.button(
-        label="十連抽 950 D",
+        label="十連抽",
         emoji="🎰",
         style=discord.ButtonStyle.success,
         custom_id="lottery_ten"
@@ -378,20 +473,20 @@ class LotteryView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        if not remove_d(
-            interaction.user.id,
-            TEN_COST
-        ):
+        user_id = interaction.user.id
+
+        if get_tickets(user_id) < 10:
+
             await interaction.response.send_message(
-                f"❌ D 幣不足！\n"
-                f"需要：**{TEN_COST} D**\n"
-                f"目前：**{get_balance(interaction.user.id)} D**",
+                "❌ 你需要至少 **10 張抽獎券**！",
                 ephemeral=True
             )
+
             return
 
+        remove_tickets(user_id, 10)
+
         results = []
-        total_reward = 0
 
         for _ in range(10):
 
@@ -399,88 +494,85 @@ class LotteryView(discord.ui.View):
 
             results.append(prize)
 
-            reward = prize_d_amount(prize)
+            give_prize(user_id, prize)
 
-            if reward > 0:
-                total_reward += reward
+        remaining = get_tickets(user_id)
 
-        if total_reward > 0:
-            add_d(
-                interaction.user.id,
-                total_reward
-            )
-
-        remaining = get_balance(
-            interaction.user.id
-        )
+        balance = get_balance(user_id)
 
         message = "🎰 **十連抽結果**\n\n"
 
-        for i, prize in enumerate(
-            results,
-            1
-        ):
+        for i, prize in enumerate(results, 1):
+
             message += f"`{i}.` {prize}\n"
 
         message += (
-            f"\n💰 剩餘：**{remaining:,} D**"
+            f"\n👤 玩家：{interaction.user.mention}\n"
+            f"🎟️ 剩餘抽獎券：**{remaining}**\n"
+            f"💰 D 幣：**{balance:,} D**"
         )
 
-        await interaction.response.send_message(
-            message
-        )
+        await interaction.response.send_message(message)
 
-        await send_log(
+        log_message = (
             f"🎰 **十連抽紀錄**\n"
             f"👤 玩家：{interaction.user.mention}\n"
-            f"💰 花費：**950 D**\n"
-            f"🎁 結果：\n"
-            + "\n".join(
-                f"`{i}.` {prize}"
-                for i, prize in enumerate(
-                    results,
-                    1
-                )
-            )
-            + f"\n💰 剩餘：**{remaining:,} D**"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"🎟️ 消耗：**10 張抽獎券**\n"
+            f"🎁 抽獎結果：\n"
         )
 
+        for i, prize in enumerate(results, 1):
 
-# =========================
+            log_message += f"`{i}.` {prize}\n"
+
+        log_message += (
+            f"🎟️ 剩餘抽獎券：**{remaining}**\n"
+            f"💰 D 幣：**{balance:,} D**"
+        )
+
+        await send_log(log_message)
+
+
+# ==========================================
 # /lottery
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="lottery",
-    description="建立 D 幣抽獎面板"
+    description="建立抽獎面板"
 )
 async def lottery(
     interaction: discord.Interaction
 ):
 
     if not interaction.user.guild_permissions.administrator:
+
         await interaction.response.send_message(
-            "❌ 只有管理員可以建立面板。",
+            "❌ 只有管理員可以建立抽獎面板。",
             ephemeral=True
         )
+
         return
 
     embed = discord.Embed(
         title="🎰 D 幣幸運抽獎",
         description=(
-            "✨ **試試你的運氣！**\n\n"
-            "🎟️ **單抽：100 D**\n"
-            "🎰 **十連抽：950 D**\n\n"
-            "💰 10 D — **40%**\n"
+            "🎟️ 使用抽獎券參加\n\n"
+
+            "🎟️ **單抽：1 張**\n"
+            "🎰 **十連抽：10 張**\n\n"
+
+            "💰 10 D — **60%**\n"
             "💰 110 D — **30%**\n"
-            "💎 200 D — **20%**\n"
-            "🎁 皮膚箱 ×1 — **9%**\n"
-            "👑 任意 1000 R 商品 — **1%**"
+            "💎 200 D — **9%**\n"
+            "🎁 皮膚箱 ×1 — **0.9%**\n"
+            "👑 任意 1000 R 商品 — **0.1%**"
         )
     )
 
     embed.set_footer(
-        text="每次抽獎都有獎勵！祝你好運！"
+        text="每次抽獎都有獎勵！"
     )
 
     await interaction.response.send_message(
@@ -489,9 +581,9 @@ async def lottery(
     )
 
 
-# =========================
+# ==========================================
 # /pay
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="pay",
@@ -508,40 +600,45 @@ async def pay(
 ):
 
     if member.id == interaction.user.id:
+
         await interaction.response.send_message(
             "❌ 不能轉給自己。",
             ephemeral=True
         )
+
         return
 
     if member.bot:
+
         await interaction.response.send_message(
             "❌ 不能轉給 Bot。",
             ephemeral=True
         )
+
         return
 
     if amount <= 0:
+
         await interaction.response.send_message(
             "❌ 數量必須大於 0。",
             ephemeral=True
         )
+
         return
 
     if not remove_d(
         interaction.user.id,
         amount
     ):
+
         await interaction.response.send_message(
             "❌ 你的 D 幣不足。",
             ephemeral=True
         )
+
         return
 
-    add_d(
-        member.id,
-        amount
-    )
+    add_d(member.id, amount)
 
     remaining = get_balance(
         interaction.user.id
@@ -560,9 +657,9 @@ async def pay(
     )
 
 
-# =========================
+# ==========================================
 # /shop
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="shop",
@@ -574,26 +671,28 @@ async def shop(
 
     message = (
         "🛒 **D 幣商店**\n\n"
-        "🎁 皮膚箱 ×1\n"
-        "💰 **5,000 D**\n"
+
+        "🎁 **皮膚箱 ×1**\n"
+        "💰 5,000 D\n"
         "代碼：`skinbox`\n\n"
-        "🏆 限定稱號\n"
-        "💰 **10,000 D**\n"
+
+        "🏆 **限定稱號**\n"
+        "💰 10,000 D\n"
         "代碼：`title`\n\n"
-        "💰 有錢人身分組\n"
-        "💰 **50,000 D**\n"
+
+        "💰 **有錢人身分組**\n"
+        "💰 50,000 D\n"
         "代碼：`rich`\n\n"
+
         "使用 `/buy` 兌換。"
     )
 
-    await interaction.response.send_message(
-        message
-    )
+    await interaction.response.send_message(message)
 
 
-# =========================
+# ==========================================
 # /buy
-# =========================
+# ==========================================
 
 @bot.tree.command(
     name="buy",
@@ -610,11 +709,13 @@ async def buy(
     item = item.lower()
 
     if item not in SHOP_ITEMS:
+
         await interaction.response.send_message(
             "❌ 找不到商品。\n"
             "可用：`skinbox`、`title`、`rich`",
             ephemeral=True
         )
+
         return
 
     product = SHOP_ITEMS[item]
@@ -626,12 +727,14 @@ async def buy(
         interaction.user.id,
         price
     ):
+
         await interaction.response.send_message(
             f"❌ D 幣不足！\n"
             f"需要：**{price:,} D**\n"
             f"目前：**{get_balance(interaction.user.id):,} D**",
             ephemeral=True
         )
+
         return
 
     remaining = get_balance(
@@ -655,9 +758,9 @@ async def buy(
     )
 
 
-# =========================
+# ==========================================
 # 啟動
-# =========================
+# ==========================================
 
 if not TOKEN:
     raise RuntimeError(
