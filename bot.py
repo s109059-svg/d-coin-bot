@@ -768,3 +768,122 @@ if not TOKEN:
     )
 
 bot.run(TOKEN)
+# ==========================================
+# 每日免費抽獎
+# ==========================================
+
+from datetime import datetime, timezone, timedelta
+
+DAILY_PRIZES = [
+    ("🎟️ 抽獎券 ×1", 5.0),
+    ("💰 10 D", 15.0),
+    ("💰 30 D", 10.0),
+    ("😶 沒有獎勵", 70.0)
+]
+
+
+def draw_daily_prize():
+    roll = random.uniform(0, 100)
+    current = 0
+
+    for prize, chance in DAILY_PRIZES:
+        current += chance
+
+        if roll <= current:
+            return prize
+
+    return "😶 沒有獎勵"
+
+
+def give_daily_prize(user_id, prize):
+
+    if prize == "🎟️ 抽獎券 ×1":
+        add_tickets(user_id, 1)
+
+    elif prize == "💰 10 D":
+        add_d(user_id, 10)
+
+    elif prize == "💰 30 D":
+        add_d(user_id, 30)
+
+
+# ==========================================
+# /daily
+# ==========================================
+
+@bot.tree.command(
+    name="daily",
+    description="每日免費抽獎"
+)
+async def daily(interaction: discord.Interaction):
+
+    user_id = interaction.user.id
+    user = ensure_user(user_id)
+
+    now = datetime.now(timezone.utc)
+
+    # 上次抽獎時間
+    last_daily = user.get("last_daily")
+
+    if last_daily:
+
+        try:
+            last_time = datetime.fromisoformat(last_daily)
+
+            elapsed = now - last_time
+
+            if elapsed < timedelta(hours=24):
+
+                remaining = timedelta(hours=24) - elapsed
+
+                hours = remaining.seconds // 3600
+                minutes = (remaining.seconds % 3600) // 60
+
+                await interaction.response.send_message(
+                    f"⏰ **你今天已經抽過了！**\n\n"
+                    f"下一次可以在 "
+                    f"**{hours} 小時 {minutes} 分鐘**後抽取。",
+                    ephemeral=True
+                )
+
+                return
+
+        except Exception:
+            pass
+
+    # 更新抽獎時間
+    user["last_daily"] = now.isoformat()
+
+    save_data()
+
+    # 抽獎
+    prize = draw_daily_prize()
+
+    # 發放獎勵
+    give_daily_prize(
+        user_id,
+        prize
+    )
+
+    tickets = get_tickets(user_id)
+    balance = get_balance(user_id)
+
+    # 玩家看到的結果
+    await interaction.response.send_message(
+        f"🎁 **每日免費抽獎！**\n\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"🎉 結果：**{prize}**\n\n"
+        f"💰 D 幣：**{balance:,} D**\n"
+        f"🎟️ 抽獎券：**{tickets} 張**\n\n"
+        f"⏰ 24 小時後可以再次抽取！"
+    )
+
+    # 管理員紀錄
+    await send_log(
+        f"🎁 **每日免費抽獎紀錄**\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"🆔 玩家 ID：`{user_id}`\n"
+        f"🎉 結果：**{prize}**\n"
+        f"💰 D 幣：**{balance:,} D**\n"
+        f"🎟️ 抽獎券：**{tickets} 張**"
+    )
