@@ -146,6 +146,33 @@ SLOT_TWO_MATCH_PAYOUT = 1.5
 
 
 # ==========================================
+# 拆彈遊戲設定（5x5 地雷）
+# ==========================================
+
+MINES_MIN_BET = 100
+MINES_MAX_BET = 10000
+
+MINES_GRID_SIZE = 5
+MINES_TOTAL_CELLS = MINES_GRID_SIZE * MINES_GRID_SIZE
+MINES_MIN_BOMBS = 5
+
+# 依炸彈數量對應「安全格獎勵倍率」（每翻開一格安全格增加的倍率）
+# 炸彈越多，單格倍率越高
+MINES_BOMB_MULTIPLIER = {
+    5: 1.15,
+    6: 1.20,
+    7: 1.28,
+    8: 1.35,
+    9: 1.45,
+    10: 1.55,
+    12: 1.75,
+    15: 2.10,
+    18: 2.60,
+    20: 3.20,
+}
+
+
+# ==========================================
 # 資料庫
 # ==========================================
 
@@ -1548,6 +1575,444 @@ async def slots(
             f"🎡 結果：{reels_text}\n"
             f"💰 餘額：**{balance_amount:,} D**"
         )
+
+
+# ==========================================
+# 拆彈遊戲（5x5 地雷）
+# ==========================================
+
+def get_bomb_multiplier(bomb_count: int) -> float:
+
+    # 找出小於等於 bomb_count 的最大設定值
+    keys = sorted(MINES_BOMB_MULTIPLIER.keys())
+
+    chosen = keys[0]
+
+    for k in keys:
+
+        if bomb_count >= k:
+
+            chosen = k
+
+        else:
+
+            break
+
+    return MINES_BOMB_MULTIPLIER[chosen]
+
+
+class MinesView(discord.ui.View):
+
+    def __init__(
+        self,
+        owner_id: int,
+        amount: int,
+        bomb_count: int
+    ):
+
+        super().__init__(timeout=120)
+
+        self.owner_id = owner_id
+        self.amount = amount
+        self.bomb_count = bomb_count
+        self.per_cell_multiplier = get_bomb_multiplier(bomb_count)
+
+        self.opened = 0
+        self.current_multiplier = 1.0
+        self.game_over = False
+
+        # 隨機排列地雷位置
+        positions = list(range(MINES_TOTAL_CELLS))
+        random.shuffle(positions)
+
+        self.bomb_positions = set(positions[:bomb_count])
+
+        # 建立 25 個按鈕
+        for i in range(MINES_TOTAL_CELLS):
+
+            button = discord.ui.Button(
+                label="❔",
+                style=discord.ButtonStyle.secondary,
+                row=i // MINES_GRID_SIZE,
+                custom_id=f"mine_{i}"
+            )
+
+            button.callback = self.make_callback(i)
+
+            self.add_item(button)
+
+        # 兌現按鈕
+        self.cashout_button = discord.ui.Button(
+            label="💰 兌現",
+            style=discord.ButtonStyle.success,
+            row=MINES_GRID_SIZE,
+            custom_id="mine_cashout"
+        )
+
+        self.cashout_button.callback = self.cashout_callback
+
+        self.add_item(self.cashout_button)
+
+    def make_callback(self, index: int):
+
+        async def callback(interaction: discord.Interaction):
+
+            await self.handle_click(interaction, index)
+
+        return callback
+
+    async def handle_click(
+        self,
+        interaction: discord.Interaction,
+        index: int
+    ):
+
+        if interaction.user.id != self.owner_id:
+
+            await interaction.response.send_message(
+                "❌ 這不是你的遊戲。",
+                ephemeral=True
+            )
+
+            return
+
+        if self.game_over:
+
+            await interaction.response.send_message(
+                "❌ 這局遊戲已經結束了。",
+                ephemeral=True
+            )
+
+            return
+
+        clicked_button = None
+
+        for item in self.children:
+
+            if getattr(item, "custom_id", None) == f"mine_{index}":
+
+                clicked_button = item
+
+                break
+
+        if clicked_button is None or clicked_button.disabled:
+
+            await interaction.response.send_message(
+                "❌ 這格已經翻開了。",
+                ephemeral=True
+            )
+
+            return
+
+        # ======================================
+        # 踩到炸彈
+        # ======================================
+
+        if index in self.bomb_positions:
+
+            self.game_over = True
+
+            self.reveal_all(exploded_index=index)
+
+            for item in self.children:
+
+                item.disabled = True
+
+            await interaction.response.edit_message(
+                content=(
+                    f"💣 **踩到炸彈了！**\n\n"
+                    f"👤 玩家：{interaction.user.mention}\n"
+                    f"🧨 炸彈數量：**{self.bomb_count} 顆**\n"
+                    f"💸 下注：**{self.amount:,} D**\n\n"
+                    f"💔 **全部輸掉了！**"
+                ),
+                view=self
+            )
+
+            await send_log(
+                f"💣 **拆彈紀錄（爆炸）**\n"
+                f"👤 玩家：{interaction.user.mention}\n"
+                f"🆔 玩家 ID：`{self.owner_id}`\n"
+                f"🧨 炸彈數量：**{self.bomb_count} 顆**\n"
+                f"💸 下注：**{self.amount:,} D**\n"
+                f"🔓 已開啟安全格：**{self.opened} 格**\n"
+                f"💰 損失：**{self.amount:,} D**"
+            )
+
+            return
+
+        # ======================================
+        # 安全格
+        # ======================================
+
+        self.opened += 1
+
+        self.current_multiplier *= self.per_cell_multiplier
+
+        clicked_button.label = "💎"
+        clicked_button.style = discord.ButtonStyle.success
+        clicked_button.disabled = True
+
+        potential_payout = int(
+            self.amount * self.current_multiplier
+        )
+
+        safe_cells_left = MINES_TOTAL_CELLS - self.bomb_count - self.opened
+
+        await interaction.response.edit_message(
+            content=(
+                f"💎 **拆彈進行中**\n\n"
+                f"👤 玩家：{interaction.user.mention}\n"
+                f"🧨 炸彈數量：**{self.bomb_count} 顆**\n"
+                f"💸 下注：**{self.amount:,} D**\n"
+                f"🔓 已開啟：**{self.opened} 格**（剩餘安全格：{safe_cells_left}）\n"
+                f"📈 目前倍率：**x{self.current_multiplier:.2f}**\n"
+                f"💰 目前可兌現：**{potential_payout:,} D**\n\n"
+                f"⚠️ 隨時可以按「💰 兌現」停止，或繼續冒險翻更多格！"
+            ),
+            view=self
+        )
+
+        # 全部安全格都翻完了，自動兌現
+        if safe_cells_left <= 0:
+
+            await self.finish_cashout(interaction, auto=True)
+
+    async def cashout_callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.owner_id:
+
+            await interaction.response.send_message(
+                "❌ 這不是你的遊戲。",
+                ephemeral=True
+            )
+
+            return
+
+        if self.game_over:
+
+            await interaction.response.send_message(
+                "❌ 這局遊戲已經結束了。",
+                ephemeral=True
+            )
+
+            return
+
+        if self.opened == 0:
+
+            await interaction.response.send_message(
+                "❌ 你還沒翻開任何一格，無法兌現。",
+                ephemeral=True
+            )
+
+            return
+
+        await self.finish_cashout(interaction, auto=False)
+
+    async def finish_cashout(
+        self,
+        interaction: discord.Interaction,
+        auto: bool
+    ):
+
+        self.game_over = True
+
+        payout = int(self.amount * self.current_multiplier)
+
+        add_d(
+            self.owner_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            self.owner_id
+        )
+
+        self.reveal_all(exploded_index=None)
+
+        for item in self.children:
+
+            item.disabled = True
+
+        content = (
+            f"💰 **{'全部翻完，自動兌現！' if auto else '成功兌現！'}**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🧨 炸彈數量：**{self.bomb_count} 顆**\n"
+            f"💸 下注：**{self.amount:,} D**\n"
+            f"🔓 開啟安全格：**{self.opened} 格**\n"
+            f"📈 最終倍率：**x{self.current_multiplier:.2f}**\n"
+            f"🎉 **獲得：{payout:,} D！**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        if auto:
+
+            await interaction.followup.send(
+                content,
+                view=self
+            )
+
+        else:
+
+            await interaction.response.edit_message(
+                content=content,
+                view=self
+            )
+
+        await send_log(
+            f"💰 **拆彈紀錄（兌現）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{self.owner_id}`\n"
+            f"🧨 炸彈數量：**{self.bomb_count} 顆**\n"
+            f"💸 下注：**{self.amount:,} D**\n"
+            f"🔓 開啟安全格：**{self.opened} 格**\n"
+            f"📈 最終倍率：**x{self.current_multiplier:.2f}**\n"
+            f"💰 獲得：**{payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    def reveal_all(self, exploded_index):
+
+        for item in self.children:
+
+            custom_id = getattr(item, "custom_id", "")
+
+            if not custom_id.startswith("mine_") or custom_id == "mine_cashout":
+
+                continue
+
+            index = int(custom_id.split("_")[1])
+
+            if item.disabled:
+
+                continue
+
+            if index in self.bomb_positions:
+
+                if index == exploded_index:
+
+                    item.label = "💥"
+                    item.style = discord.ButtonStyle.danger
+
+                else:
+
+                    item.label = "💣"
+                    item.style = discord.ButtonStyle.secondary
+
+                item.disabled = True
+
+            else:
+
+                item.label = "▫️"
+                item.disabled = True
+
+    async def on_timeout(self):
+
+        if not self.game_over and self.opened > 0:
+
+            # 逾時自動退回原始下注金額（不含獲利），避免卡住玩家資金
+            add_d(self.owner_id, self.amount)
+
+        self.game_over = True
+
+        for item in self.children:
+
+            item.disabled = True
+
+
+# ==========================================
+# /mines 拆彈遊戲
+# ==========================================
+
+@bot.tree.command(
+    name="mines",
+    description="拆彈遊戲：5x5 地雷，越多炸彈倍率越高，全靠運氣"
+)
+@app_commands.describe(
+    amount="下注金額（最少 100，最多 10000）",
+    bombs="炸彈數量（最少 5 顆，最多 20 顆）"
+)
+async def mines(
+    interaction: discord.Interaction,
+    amount: int,
+    bombs: int
+):
+
+    user_id = interaction.user.id
+
+    if amount < MINES_MIN_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{MINES_MIN_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount > MINES_MAX_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{MINES_MAX_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if bombs < MINES_MIN_BOMBS:
+
+        await interaction.response.send_message(
+            f"❌ 炸彈數量最少要 **{MINES_MIN_BOMBS} 顆**。",
+            ephemeral=True
+        )
+
+        return
+
+    if bombs >= MINES_TOTAL_CELLS:
+
+        await interaction.response.send_message(
+            f"❌ 炸彈數量最多 **{MINES_TOTAL_CELLS - 1} 顆**（要留至少 1 格安全格）。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(
+        user_id,
+        amount
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    view = MinesView(
+        owner_id=user_id,
+        amount=amount,
+        bomb_count=bombs
+    )
+
+    await interaction.response.send_message(
+        f"💣 **拆彈遊戲開始！**\n\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"🧨 炸彈數量：**{bombs} 顆**（共 {MINES_TOTAL_CELLS} 格）\n"
+        f"💸 下注：**{amount:,} D**\n"
+        f"📈 每格倍率：**x{view.per_cell_multiplier}**\n\n"
+        f"點擊格子翻開，沒有任何提示，全憑運氣！\n"
+        f"隨時可以按「💰 兌現」把目前獎勵收下。",
+        view=view
+    )
+
+    await send_log(
+        f"💣 **拆彈遊戲開始**\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"🆔 玩家 ID：`{user_id}`\n"
+        f"🧨 炸彈數量：**{bombs} 顆**\n"
+        f"💸 下注：**{amount:,} D**"
+    )
 
 
 # ==========================================
