@@ -115,6 +115,37 @@ COIN_MAX_BET = 10000
 
 
 # ==========================================
+# 骰子比大小設定
+# ==========================================
+
+DICE_MIN_BET = 100
+DICE_MAX_BET = 10000
+
+
+# ==========================================
+# 拉霸機設定
+# ==========================================
+
+SLOTS_MIN_BET = 100
+SLOTS_MAX_BET = 10000
+
+SLOT_SYMBOLS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
+
+# 三個相同時的倍率
+SLOT_PAYOUTS = {
+    "🍒": 2,
+    "🍋": 3,
+    "🔔": 5,
+    "⭐": 10,
+    "💎": 20,
+    "7️⃣": 50,
+}
+
+# 兩個相同時的倍率（固定）
+SLOT_TWO_MATCH_PAYOUT = 1.5
+
+
+# ==========================================
 # 資料庫
 # ==========================================
 
@@ -1212,6 +1243,309 @@ async def coinflip(
             f"💸 下注：**{amount:,} D**\n"
             f"🎯 猜測：{guess_text}\n"
             f"🎲 結果：{result_text}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+
+# ==========================================
+# /dice 骰子比大小
+# ==========================================
+
+@bot.tree.command(
+    name="dice",
+    description="骰子比大小：你 vs 莊家，各擲一顆骰子，點數大的贏"
+)
+@app_commands.describe(
+    amount="下注金額（最少 100，最多 10000）"
+)
+async def dice(
+    interaction: discord.Interaction,
+    amount: int
+):
+
+    user_id = interaction.user.id
+
+    if amount < DICE_MIN_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{DICE_MIN_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount > DICE_MAX_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{DICE_MAX_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(
+        user_id,
+        amount
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    player_roll = random.randint(1, 6)
+    dealer_roll = random.randint(1, 6)
+
+    dice_emoji = {
+        1: "⚀", 2: "⚁", 3: "⚂",
+        4: "⚃", 5: "⚄", 6: "⚅"
+    }
+
+    player_text = f"{dice_emoji[player_roll]} ({player_roll})"
+    dealer_text = f"{dice_emoji[dealer_roll]} ({dealer_roll})"
+
+    # ======================================
+    # 判定勝負
+    # ======================================
+
+    if player_roll > dealer_roll:
+
+        payout = amount * 2
+
+        add_d(
+            user_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎲 **骰子比大小**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🙋 你：{player_text}\n"
+            f"🏦 莊家：{dealer_text}\n\n"
+            f"🎉 **你贏了！獲得 {payout:,} D！**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎲 **骰子紀錄（贏）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🙋 玩家：{player_text} vs 🏦 莊家：{dealer_text}\n"
+            f"💰 獲得：**{payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    elif player_roll < dealer_roll:
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎲 **骰子比大小**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🙋 你：{player_text}\n"
+            f"🏦 莊家：{dealer_text}\n\n"
+            f"💔 **你輸了！輸掉 {amount:,} D**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎲 **骰子紀錄（輸）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🙋 玩家：{player_text} vs 🏦 莊家：{dealer_text}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    else:
+
+        # 平手，退回下注金額
+        add_d(
+            user_id,
+            amount
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎲 **骰子比大小**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🙋 你：{player_text}\n"
+            f"🏦 莊家：{dealer_text}\n\n"
+            f"🤝 **平手！退回下注金額**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎲 **骰子紀錄（平手）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**（已退回）\n"
+            f"🙋 玩家：{player_text} vs 🏦 莊家：{dealer_text}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+
+# ==========================================
+# /slots 拉霸機
+# ==========================================
+
+@bot.tree.command(
+    name="slots",
+    description="拉霸機：轉出三個相同圖案獲得高倍獎勵"
+)
+@app_commands.describe(
+    amount="下注金額（最少 100，最多 10000）"
+)
+async def slots(
+    interaction: discord.Interaction,
+    amount: int
+):
+
+    user_id = interaction.user.id
+
+    if amount < SLOTS_MIN_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{SLOTS_MIN_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount > SLOTS_MAX_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{SLOTS_MAX_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(
+        user_id,
+        amount
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    reels = [
+        random.choice(SLOT_SYMBOLS)
+        for _ in range(3)
+    ]
+
+    reels_text = " | ".join(reels)
+
+    # ======================================
+    # 判定結果
+    # ======================================
+
+    if reels[0] == reels[1] == reels[2]:
+
+        multiplier = SLOT_PAYOUTS[reels[0]]
+
+        payout = amount * multiplier
+
+        add_d(
+            user_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎰 **拉霸機**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎡 {reels_text}\n\n"
+            f"🎉 **三個相同！x{multiplier} 倍！獲得 {payout:,} D！**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎰 **拉霸機紀錄（大獎）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎡 結果：{reels_text}\n"
+            f"💰 獲得：**{payout:,} D**（x{multiplier}）\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    elif (
+        reels[0] == reels[1]
+        or reels[1] == reels[2]
+        or reels[0] == reels[2]
+    ):
+
+        payout = int(amount * SLOT_TWO_MATCH_PAYOUT)
+
+        add_d(
+            user_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎰 **拉霸機**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎡 {reels_text}\n\n"
+            f"✨ **兩個相同！小獎 {payout:,} D**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎰 **拉霸機紀錄（小獎）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎡 結果：{reels_text}\n"
+            f"💰 獲得：**{payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    else:
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🎰 **拉霸機**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎡 {reels_text}\n\n"
+            f"💔 **沒中獎！輸掉 {amount:,} D**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🎰 **拉霸機紀錄（未中獎）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎡 結果：{reels_text}\n"
             f"💰 餘額：**{balance_amount:,} D**"
         )
 
