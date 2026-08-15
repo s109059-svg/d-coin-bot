@@ -1,43 +1,54 @@
 import os
-import random
 import json
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+# =========================
+# 基本設定
+# =========================
+
 TOKEN = os.getenv("DISCORD_TOKEN")
+
+LOG_CHANNEL_ID = 1538123620193280021
+
 DATA_FILE = "data.json"
 
-# =========================
-# 抽獎設定
-# =========================
+# 固定兌換商品
+SHOP_ITEMS = {
+    "skinbox": {
+        "name": "🎁 皮膚箱 ×1",
+        "price": 500
+    },
+    "title": {
+        "name": "🏆 限定稱號",
+        "price": 1000
+    },
+    "vip": {
+        "name": "👑 VIP 身分組",
+        "price": 2000
+    }
+}
 
-SINGLE_COST = 100
-TEN_COST = 950
-
-PRIZES = [
-    ("❌ 沒抽中", 40),
-    ("💰 110 D", 30),
-    ("💎 200 D", 20),
-    ("🎁 皮膚箱 ×1", 9),
-    ("👑 超大獎：任意 1000 R 商品", 1),
-]
 
 # =========================
-# 資料庫
+# 資料保存
 # =========================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {}
 
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except:
+        return {}
 
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def save_data():
+    with open(DATA_FILE, "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=4)
 
 
 data = load_data()
@@ -48,21 +59,28 @@ def get_balance(user_id):
 
     if user_id not in data:
         data[user_id] = 0
-        save_data(data)
+        save_data()
 
     return data[user_id]
 
 
 def add_d(user_id, amount):
     user_id = str(user_id)
+
     data[user_id] = get_balance(user_id) + amount
-    save_data(data)
+    save_data()
 
 
 def remove_d(user_id, amount):
     user_id = str(user_id)
-    data[user_id] = get_balance(user_id) - amount
-    save_data(data)
+
+    if get_balance(user_id) < amount:
+        return False
+
+    data[user_id] -= amount
+    save_data()
+
+    return True
 
 
 # =========================
@@ -79,21 +97,46 @@ bot = commands.Bot(
 
 @bot.event
 async def on_ready():
+
     await bot.tree.sync()
+
     print(f"Bot 已登入：{bot.user}")
+    print("D Coin Bot 已啟動")
+
+
+# =========================
+# 紀錄系統
+# =========================
+
+async def send_log(message):
+
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+
+    if channel is None:
+        print("找不到 D 幣紀錄頻道")
+        return
+
+    try:
+        await channel.send(message)
+    except Exception as error:
+        print(f"發送紀錄失敗：{error}")
 
 
 # =========================
 # /balance
 # =========================
 
-@bot.tree.command(name="balance", description="查看你的 D 幣")
+@bot.tree.command(
+    name="balance",
+    description="查看自己的 D 幣"
+)
 async def balance(interaction: discord.Interaction):
 
     amount = get_balance(interaction.user.id)
 
     await interaction.response.send_message(
-        f"💰 {interaction.user.mention} 目前擁有 **{amount} D**"
+        f"💰 {interaction.user.mention}\n"
+        f"你目前擁有 **{amount:,} D**"
     )
 
 
@@ -101,10 +144,13 @@ async def balance(interaction: discord.Interaction):
 # /addd
 # =========================
 
-@bot.tree.command(name="addd", description="增加 D 幣（管理員）")
+@bot.tree.command(
+    name="addd",
+    description="管理員增加 D 幣"
+)
 @app_commands.describe(
     member="要增加 D 幣的成員",
-    amount="增加多少 D 幣"
+    amount="增加的 D 幣數量"
 )
 async def addd(
     interaction: discord.Interaction,
@@ -113,218 +159,255 @@ async def addd(
 ):
 
     if not interaction.user.guild_permissions.administrator:
+
         await interaction.response.send_message(
             "❌ 只有管理員可以使用這個指令。",
             ephemeral=True
         )
+
         return
 
     if amount <= 0:
+
         await interaction.response.send_message(
             "❌ 數量必須大於 0。",
             ephemeral=True
         )
+
         return
 
     add_d(member.id, amount)
 
+    new_balance = get_balance(member.id)
+
     await interaction.response.send_message(
-        f"✅ 已給 {member.mention} **{amount} D**\n"
-        f"💰 目前餘額：**{get_balance(member.id)} D**"
+        f"✅ 已給 {member.mention} **{amount:,} D**\n"
+        f"💰 新餘額：**{new_balance:,} D**"
+    )
+
+    await send_log(
+        f"💰 **D 幣增加紀錄**\n"
+        f"👤 成員：{member.mention}\n"
+        f"👮 操作者：{interaction.user.mention}\n"
+        f"➕ 增加：**{amount:,} D**\n"
+        f"💰 餘額：**{new_balance:,} D**"
     )
 
 
 # =========================
-# 抽獎
-# =========================
-
-def draw_prize():
-
-    roll = random.uniform(0, 100)
-    current = 0
-
-    for prize, chance in PRIZES:
-        current += chance
-
-        if roll <= current:
-            return prize
-
-    return "❌ 沒抽中"
-
-
-async def do_draw(user, times):
-
-    cost = SINGLE_COST if times == 1 else TEN_COST
-    balance = get_balance(user.id)
-
-    if balance < cost:
-        return (
-            False,
-            f"❌ 你的 D 幣不足！\n"
-            f"需要：**{cost} D**\n"
-            f"目前：**{balance} D**"
-        )
-
-    remove_d(user.id, cost)
-
-    results = []
-
-    for _ in range(times):
-
-        prize = draw_prize()
-        results.append(prize)
-
-        # D 幣獎勵
-        if prize == "💰 110 D":
-            add_d(user.id, 110)
-
-        elif prize == "💎 200 D":
-            add_d(user.id, 200)
-
-    return True, results
-
-
-# =========================
-# 抽獎面板
-# =========================
-
-class LotteryView(discord.ui.View):
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="單抽 100 D",
-        style=discord.ButtonStyle.primary,
-        emoji="🎟️",
-        custom_id="lottery_single"
-    )
-    async def single_draw(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        success, result = await do_draw(
-            interaction.user,
-            1
-        )
-
-        if not success:
-            await interaction.response.send_message(
-                result,
-                ephemeral=True
-            )
-            return
-
-        prize = result[0]
-
-        message = (
-            f"🎰 **抽獎結果**\n\n"
-            f"{prize}\n\n"
-            f"💰 剩餘 D 幣："
-            f"**{get_balance(interaction.user.id)} D**"
-        )
-
-        if "超大獎" in prize:
-            message += (
-                "\n\n🚨 **恭喜！你抽中了超大獎！**\n"
-                "請等待管理員聯絡你領取獎勵。"
-            )
-
-        elif "皮膚箱" in prize:
-            message += "\n\n🎁 請聯絡管理員領取皮膚箱。"
-
-        await interaction.response.send_message(
-            message,
-            ephemeral=True
-        )
-
-
-    @discord.ui.button(
-        label="十連抽 950 D",
-        style=discord.ButtonStyle.success,
-        emoji="🎰",
-        custom_id="lottery_ten"
-    )
-    async def ten_draw(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        success, result = await do_draw(
-            interaction.user,
-            10
-        )
-
-        if not success:
-            await interaction.response.send_message(
-                result,
-                ephemeral=True
-            )
-            return
-
-        message = "🎰 **十連抽結果**\n\n"
-
-        for i, prize in enumerate(result, 1):
-            message += f"`{i}.` {prize}\n"
-
-        message += (
-            f"\n💰 剩餘 D 幣："
-            f"**{get_balance(interaction.user.id)} D**"
-        )
-
-        if any("超大獎" in prize for prize in result):
-            message += (
-                "\n\n🚨 **有人抽中超大獎！**\n"
-                "請管理員處理獎勵。"
-            )
-
-        await interaction.response.send_message(
-            message,
-            ephemeral=True
-        )
-
-
-# =========================
-# /lottery
+# /removed
 # =========================
 
 @bot.tree.command(
-    name="lottery",
-    description="建立 D 幣抽獎面板"
+    name="removed",
+    description="管理員扣除 D 幣"
 )
-async def lottery(interaction: discord.Interaction):
+@app_commands.describe(
+    member="要扣除 D 幣的成員",
+    amount="扣除的 D 幣數量"
+)
+async def removed(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: int
+):
 
     if not interaction.user.guild_permissions.administrator:
+
         await interaction.response.send_message(
-            "❌ 只有管理員可以建立抽獎面板。",
+            "❌ 只有管理員可以使用這個指令。",
             ephemeral=True
         )
+
         return
 
-    embed = discord.Embed(
-        title="🎰 D 幣幸運抽獎",
-        description=(
-            "使用 D 幣進行抽獎！\n\n"
-            "🎟️ **單抽：100 D**\n"
-            "🎰 **十連抽：950 D**\n\n"
-            "❌ 沒抽中｜40%\n"
-            "💰 110 D｜30%\n"
-            "💎 200 D｜20%\n"
-            "🎁 皮膚箱 ×1｜9%\n"
-            "👑 任意 1000 R 商品｜1%"
-        ),
-    )
+    if amount <= 0:
 
-    embed.set_footer(
-        text="祝你好運！🎰"
-    )
+        await interaction.response.send_message(
+            "❌ 數量必須大於 0。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(member.id, amount):
+
+        await interaction.response.send_message(
+            f"❌ {member.mention} 的 D 幣不足。",
+            ephemeral=True
+        )
+
+        return
+
+    new_balance = get_balance(member.id)
 
     await interaction.response.send_message(
-        embed=embed,
-        view=LotteryView()
+        f"✅ 已扣除 {member.mention} **{amount:,} D**\n"
+        f"💰 新餘額：**{new_balance:,} D**"
+    )
+
+    await send_log(
+        f"💸 **D 幣扣除紀錄**\n"
+        f"👤 成員：{member.mention}\n"
+        f"👮 操作者：{interaction.user.mention}\n"
+        f"➖ 扣除：**{amount:,} D**\n"
+        f"💰 餘額：**{new_balance:,} D**"
+    )
+
+
+# =========================
+# /pay
+# =========================
+
+@bot.tree.command(
+    name="pay",
+    description="把 D 幣轉給其他成員"
+)
+@app_commands.describe(
+    member="收款成員",
+    amount="轉帳數量"
+)
+async def pay(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    amount: int
+):
+
+    if member.id == interaction.user.id:
+
+        await interaction.response.send_message(
+            "❌ 不能轉給自己。",
+            ephemeral=True
+        )
+
+        return
+
+    if member.bot:
+
+        await interaction.response.send_message(
+            "❌ 不能轉給 Bot。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount <= 0:
+
+        await interaction.response.send_message(
+            "❌ 數量必須大於 0。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(interaction.user.id, amount):
+
+        await interaction.response.send_message(
+            "❌ 你的 D 幣不足。",
+            ephemeral=True
+        )
+
+        return
+
+    add_d(member.id, amount)
+
+    sender_balance = get_balance(interaction.user.id)
+
+    await interaction.response.send_message(
+        f"✅ 已轉給 {member.mention} **{amount:,} D**\n"
+        f"💰 你的餘額：**{sender_balance:,} D**"
+    )
+
+    await send_log(
+        f"💸 **D 幣轉帳紀錄**\n"
+        f"👤 付款：{interaction.user.mention}\n"
+        f"👤 收款：{member.mention}\n"
+        f"💰 金額：**{amount:,} D**\n"
+        f"💰 付款方餘額：**{sender_balance:,} D**"
+    )
+
+
+# =========================
+# 商店
+# =========================
+
+@bot.tree.command(
+    name="shop",
+    description="查看 D 幣商店"
+)
+async def shop(interaction: discord.Interaction):
+
+    message = (
+        "🛒 **D 幣商店**\n\n"
+        "🎁 皮膚箱 ×1 — **500 D**\n"
+        "🏆 限定稱號 — **1,000 D**\n"
+        "👑 VIP 身分組 — **2,000 D**\n\n"
+        "使用 `/buy` 兌換。"
+    )
+
+    await interaction.response.send_message(message)
+
+
+# =========================
+# /buy
+# =========================
+
+@bot.tree.command(
+    name="buy",
+    description="使用 D 幣兌換固定獎勵"
+)
+@app_commands.describe(
+    item="輸入商品代碼：skinbox / title / vip"
+)
+async def buy(
+    interaction: discord.Interaction,
+    item: str
+):
+
+    item = item.lower()
+
+    if item not in SHOP_ITEMS:
+
+        await interaction.response.send_message(
+            "❌ 找不到這個商品。\n"
+            "可使用：`skinbox`、`title`、`vip`",
+            ephemeral=True
+        )
+
+        return
+
+    product = SHOP_ITEMS[item]
+
+    price = product["price"]
+    product_name = product["name"]
+
+    if not remove_d(interaction.user.id, price):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"需要：**{price:,} D**\n"
+            f"目前：**{get_balance(interaction.user.id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    new_balance = get_balance(interaction.user.id)
+
+    await interaction.response.send_message(
+        f"✅ **兌換成功！**\n\n"
+        f"🎁 獎勵：{product_name}\n"
+        f"💰 花費：**{price:,} D**\n"
+        f"💰 剩餘：**{new_balance:,} D**\n\n"
+        f"📦 請等待管理員發放獎勵。"
+    )
+
+    await send_log(
+        f"🛒 **D 幣兌換紀錄**\n"
+        f"👤 成員：{interaction.user.mention}\n"
+        f"🎁 商品：{product_name}\n"
+        f"💰 花費：**{price:,} D**\n"
+        f"💰 剩餘：**{new_balance:,} D**"
     )
 
 
@@ -333,8 +416,9 @@ async def lottery(interaction: discord.Interaction):
 # =========================
 
 if not TOKEN:
+
     raise RuntimeError(
-        "找不到 DISCORD_TOKEN，請在 Railway 設定環境變數。"
+        "找不到 DISCORD_TOKEN，請確認 Railway Variables 已設定。"
     )
 
 bot.run(TOKEN)
