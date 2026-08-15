@@ -16,11 +16,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 LOG_CHANNEL_ID = 1538123620193280021
 
-# ⚠️ 把這裡換成「可以使用 /lottery 的身分組 ID」
-LOTTERY_ROLE_ID = 123456789012345678
-
 # ==========================================
-# 軍銜身分組（能使用 /balance /daily /pay /shop /buy）
+# 軍銜身分組（能使用 /balance /daily /pay /shop /buy /lottery）
 # ==========================================
 
 RANK_ROLE_IDS = {
@@ -106,7 +103,7 @@ RARITY_TABLE = [
     ("神話", 10, 0.3)
 ]
 
-FISHING_COST = 0  # 釣魚本身免費，只是消耗次數概念可自行擴充
+FISHING_COST = 20  # 每次釣魚消耗的 D 幣
 
 
 # ==========================================
@@ -986,18 +983,13 @@ async def lottery(
 ):
 
     # ======================================
-    # 檢查指定身分組
+    # 檢查軍銜身分組
     # ======================================
 
-    has_role = any(
-        role.id == LOTTERY_ROLE_ID
-        for role in interaction.user.roles
-    )
-
-    if not has_role:
+    if not has_rank_permission(interaction):
 
         await interaction.response.send_message(
-            "❌ 你沒有抽獎管理權限。",
+            "❌ 你沒有軍銜，無法使用此指令。",
             ephemeral=True
         )
 
@@ -1045,6 +1037,19 @@ async def fish(
 
     user_id = interaction.user.id
 
+    if not remove_d(
+        user_id,
+        FISHING_COST
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！釣魚需要 **{FISHING_COST} D**\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
     weight, rarity_name, multiplier, reward = do_fishing()
 
     add_d(
@@ -1059,6 +1064,7 @@ async def fish(
     await interaction.response.send_message(
         f"🎣 **釣魚結果！**\n\n"
         f"👤 玩家：{interaction.user.mention}\n"
+        f"💸 花費：**{FISHING_COST} D**\n"
         f"🐟 重量：**{weight} kg**\n"
         f"✨ 稀有度：**{rarity_name} (x{multiplier})**\n"
         f"💰 獲得：**{reward:,} D**\n\n"
@@ -1069,6 +1075,7 @@ async def fish(
         f"🎣 **釣魚紀錄**\n"
         f"👤 玩家：{interaction.user.mention}\n"
         f"🆔 玩家 ID：`{user_id}`\n"
+        f"💸 花費：**{FISHING_COST} D**\n"
         f"🐟 重量：**{weight} kg**\n"
         f"✨ 稀有度：**{rarity_name} (x{multiplier})**\n"
         f"💰 獲得：**{reward:,} D**\n"
