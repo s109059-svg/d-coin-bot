@@ -134,16 +134,21 @@ async def on_ready():
 # =========================
 
 async def send_log(message):
-    channel = bot.get_channel(LOG_CHANNEL_ID)
-
-    if channel is None:
-        print("找不到紀錄頻道")
-        return
-
     try:
+        channel = await bot.fetch_channel(LOG_CHANNEL_ID)
+
         await channel.send(message)
+
+        print("✅ 抽獎紀錄已發送")
+
+    except discord.Forbidden:
+        print("❌ Bot 沒有這個頻道的發送訊息權限")
+
+    except discord.NotFound:
+        print("❌ 找不到這個頻道")
+
     except Exception as error:
-        print(f"紀錄失敗：{error}")
+        print(f"❌ 發送紀錄失敗：{error}")
 
 
 # =========================
