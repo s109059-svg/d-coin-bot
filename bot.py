@@ -10,7 +10,15 @@ from discord.ext import commands
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+# ==========================================
+# ID 設定
+# ==========================================
+
 LOG_CHANNEL_ID = 1538123620193280021
+
+# ⚠️ 把這裡換成「可以使用 /lottery 的身分組 ID」
+LOTTERY_ROLE_ID = 123456789012345678
+
 DATA_FILE = "data.json"
 
 
@@ -64,19 +72,33 @@ DAILY_PRIZES = [
 # ==========================================
 
 def load_data():
+
     if not os.path.exists(DATA_FILE):
         return {}
 
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
+
+        with open(
+            DATA_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             return json.load(f)
 
     except Exception:
+
         return {}
 
 
 def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+
+    with open(
+        DATA_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
         json.dump(
             data,
             f,
@@ -89,23 +111,28 @@ data = load_data()
 
 
 def ensure_user(user_id):
+
     user_id = str(user_id)
 
     if user_id not in data:
+
         data[user_id] = {
             "balance": 0,
             "tickets": 0,
             "last_daily": None
         }
+
         save_data()
 
-    # 相容舊版資料
+    # 相容舊版只有數字的資料
     if isinstance(data[user_id], int):
+
         data[user_id] = {
             "balance": data[user_id],
             "tickets": 0,
             "last_daily": None
         }
+
         save_data()
 
     if "balance" not in data[user_id]:
@@ -125,22 +152,28 @@ def ensure_user(user_id):
 # ==========================================
 
 def get_balance(user_id):
+
     return ensure_user(user_id)["balance"]
 
 
 def add_d(user_id, amount):
+
     user = ensure_user(user_id)
+
     user["balance"] += amount
+
     save_data()
 
 
 def remove_d(user_id, amount):
+
     user = ensure_user(user_id)
 
     if user["balance"] < amount:
         return False
 
     user["balance"] -= amount
+
     save_data()
 
     return True
@@ -151,22 +184,28 @@ def remove_d(user_id, amount):
 # ==========================================
 
 def get_tickets(user_id):
+
     return ensure_user(user_id)["tickets"]
 
 
 def add_tickets(user_id, amount):
+
     user = ensure_user(user_id)
+
     user["tickets"] += amount
+
     save_data()
 
 
 def remove_tickets(user_id, amount):
+
     user = ensure_user(user_id)
 
     if user["tickets"] < amount:
         return False
 
     user["tickets"] -= amount
+
     save_data()
 
     return True
@@ -187,9 +226,30 @@ bot = commands.Bot(
 @bot.event
 async def on_ready():
 
-    await bot.tree.sync()
-
     print(f"Bot 已登入：{bot.user}")
+
+    try:
+
+        synced = await bot.tree.sync()
+
+        print(
+            f"✅ Slash Commands 同步成功："
+            f"{len(synced)} 個"
+        )
+
+        for command in synced:
+
+            print(
+                f"   /{command.name}"
+            )
+
+    except Exception as error:
+
+        print(
+            f"❌ Slash Commands 同步失敗："
+            f"{error}"
+        )
+
     print("D Coin Bot 已啟動")
 
 
@@ -200,6 +260,7 @@ async def on_ready():
 async def send_log(message):
 
     try:
+
         channel = await bot.fetch_channel(
             LOG_CHANNEL_ID
         )
@@ -209,13 +270,22 @@ async def send_log(message):
         print("✅ 紀錄已發送")
 
     except discord.Forbidden:
-        print("❌ Bot 沒有發送訊息權限")
+
+        print(
+            "❌ Bot 沒有發送訊息權限"
+        )
 
     except discord.NotFound:
-        print("❌ 找不到紀錄頻道")
+
+        print(
+            "❌ 找不到紀錄頻道"
+        )
 
     except Exception as error:
-        print(f"❌ 發送紀錄失敗：{error}")
+
+        print(
+            f"❌ 發送紀錄失敗：{error}"
+        )
 
 
 # ==========================================
@@ -224,7 +294,11 @@ async def send_log(message):
 
 def draw_prize():
 
-    roll = random.uniform(0, 100)
+    roll = random.uniform(
+        0,
+        100
+    )
+
     current = 0
 
     for prize, chance in PRIZES:
@@ -232,6 +306,7 @@ def draw_prize():
         current += chance
 
         if roll <= current:
+
             return prize
 
     return PRIZES[-1][0]
@@ -240,13 +315,25 @@ def draw_prize():
 def give_prize(user_id, prize):
 
     if prize == "💰 10 D":
-        add_d(user_id, 10)
+
+        add_d(
+            user_id,
+            10
+        )
 
     elif prize == "💰 110 D":
-        add_d(user_id, 110)
+
+        add_d(
+            user_id,
+            110
+        )
 
     elif prize == "💎 200 D":
-        add_d(user_id, 200)
+
+        add_d(
+            user_id,
+            200
+        )
 
 
 # ==========================================
@@ -255,7 +342,11 @@ def give_prize(user_id, prize):
 
 def draw_daily_prize():
 
-    roll = random.uniform(0, 100)
+    roll = random.uniform(
+        0,
+        100
+    )
+
     current = 0
 
     for prize, chance in DAILY_PRIZES:
@@ -263,21 +354,37 @@ def draw_daily_prize():
         current += chance
 
         if roll <= current:
+
             return prize
 
     return "😶 沒有獎勵"
 
 
-def give_daily_prize(user_id, prize):
+def give_daily_prize(
+    user_id,
+    prize
+):
 
     if prize == "🎟️ 抽獎券 ×1":
-        add_tickets(user_id, 1)
+
+        add_tickets(
+            user_id,
+            1
+        )
 
     elif prize == "💰 10 D":
-        add_d(user_id, 10)
+
+        add_d(
+            user_id,
+            10
+        )
 
     elif prize == "💰 30 D":
-        add_d(user_id, 30)
+
+        add_d(
+            user_id,
+            30
+        )
 
 
 # ==========================================
@@ -288,7 +395,9 @@ def give_daily_prize(user_id, prize):
     name="balance",
     description="查看自己的 D 幣"
 )
-async def balance(interaction: discord.Interaction):
+async def balance(
+    interaction: discord.Interaction
+):
 
     amount = get_balance(
         interaction.user.id
@@ -308,7 +417,9 @@ async def balance(interaction: discord.Interaction):
     name="tickets",
     description="查看自己的抽獎券"
 )
-async def tickets(interaction: discord.Interaction):
+async def tickets(
+    interaction: discord.Interaction
+):
 
     amount = get_tickets(
         interaction.user.id
@@ -328,17 +439,26 @@ async def tickets(interaction: discord.Interaction):
     name="daily",
     description="每日免費一抽"
 )
-async def daily(interaction: discord.Interaction):
+async def daily(
+    interaction: discord.Interaction
+):
 
     user_id = interaction.user.id
-    user = ensure_user(user_id)
 
-    now = datetime.now(timezone.utc)
+    user = ensure_user(
+        user_id
+    )
 
-    last_daily = user.get("last_daily")
+    now = datetime.now(
+        timezone.utc
+    )
+
+    last_daily = user.get(
+        "last_daily"
+    )
 
     # ======================================
-    # 檢查 24 小時冷卻
+    # 檢查 24 小時
     # ======================================
 
     if last_daily:
@@ -349,19 +469,26 @@ async def daily(interaction: discord.Interaction):
                 last_daily
             )
 
-            elapsed = now - last_time
+            elapsed = (
+                now - last_time
+            )
 
-            if elapsed < timedelta(hours=24):
+            if elapsed < timedelta(
+                hours=24
+            ):
 
                 remaining = (
-                    timedelta(hours=24) - elapsed
+                    timedelta(hours=24)
+                    - elapsed
                 )
 
                 total_seconds = int(
                     remaining.total_seconds()
                 )
 
-                hours = total_seconds // 3600
+                hours = (
+                    total_seconds // 3600
+                )
 
                 minutes = (
                     total_seconds % 3600
@@ -370,17 +497,19 @@ async def daily(interaction: discord.Interaction):
                 await interaction.response.send_message(
                     f"⏰ **你今天已經抽過了！**\n\n"
                     f"下一次可以在 "
-                    f"**{hours} 小時 {minutes} 分鐘**後抽取。",
+                    f"**{hours} 小時 "
+                    f"{minutes} 分鐘**後抽取。",
                     ephemeral=True
                 )
 
                 return
 
         except Exception:
+
             pass
 
     # ======================================
-    # 記錄這次抽獎時間
+    # 記錄抽獎時間
     # ======================================
 
     user["last_daily"] = now.isoformat()
@@ -398,8 +527,13 @@ async def daily(interaction: discord.Interaction):
         prize
     )
 
-    tickets = get_tickets(user_id)
-    balance = get_balance(user_id)
+    tickets = get_tickets(
+        user_id
+    )
+
+    balance = get_balance(
+        user_id
+    )
 
     # ======================================
     # 顯示結果
@@ -464,13 +598,20 @@ async def addd(
 
         return
 
-    add_d(member.id, amount)
+    add_d(
+        member.id,
+        amount
+    )
 
-    new_balance = get_balance(member.id)
+    new_balance = get_balance(
+        member.id
+    )
 
     await interaction.response.send_message(
-        f"✅ 已給 {member.mention} **{amount:,} D**\n"
-        f"💰 新餘額：**{new_balance:,} D**"
+        f"✅ 已給 {member.mention} "
+        f"**{amount:,} D**\n"
+        f"💰 新餘額："
+        f"**{new_balance:,} D**"
     )
 
     await send_log(
@@ -518,7 +659,10 @@ async def removed(
 
         return
 
-    if not remove_d(member.id, amount):
+    if not remove_d(
+        member.id,
+        amount
+    ):
 
         await interaction.response.send_message(
             "❌ D 幣不足。",
@@ -527,11 +671,15 @@ async def removed(
 
         return
 
-    new_balance = get_balance(member.id)
+    new_balance = get_balance(
+        member.id
+    )
 
     await interaction.response.send_message(
-        f"✅ 已扣除 {member.mention} **{amount:,} D**\n"
-        f"💰 新餘額：**{new_balance:,} D**"
+        f"✅ 已扣除 {member.mention} "
+        f"**{amount:,} D**\n"
+        f"💰 新餘額："
+        f"**{new_balance:,} D**"
     )
 
     await send_log(
@@ -579,12 +727,18 @@ async def addticket(
 
         return
 
-    add_tickets(member.id, amount)
+    add_tickets(
+        member.id,
+        amount
+    )
 
-    new_amount = get_tickets(member.id)
+    new_amount = get_tickets(
+        member.id
+    )
 
     await interaction.response.send_message(
-        f"🎟️ 已給 {member.mention} **{amount} 張抽獎券**\n"
+        f"🎟️ 已給 {member.mention} "
+        f"**{amount} 張抽獎券**\n"
         f"🎟️ 目前：**{new_amount} 張**"
     )
 
@@ -601,10 +755,19 @@ async def addticket(
 # 抽獎面板
 # ==========================================
 
-class LotteryView(discord.ui.View):
+class LotteryView(
+    discord.ui.View
+):
 
     def __init__(self):
-        super().__init__(timeout=None)
+
+        super().__init__(
+            timeout=None
+        )
+
+    # ======================================
+    # 單抽
+    # ======================================
 
     @discord.ui.button(
         label="單抽",
@@ -620,7 +783,9 @@ class LotteryView(discord.ui.View):
 
         user_id = interaction.user.id
 
-        if get_tickets(user_id) < 1:
+        if get_tickets(
+            user_id
+        ) < 1:
 
             await interaction.response.send_message(
                 "❌ 你沒有抽獎券！",
@@ -629,7 +794,10 @@ class LotteryView(discord.ui.View):
 
             return
 
-        remove_tickets(user_id, 1)
+        remove_tickets(
+            user_id,
+            1
+        )
 
         prize = draw_prize()
 
@@ -638,8 +806,13 @@ class LotteryView(discord.ui.View):
             prize
         )
 
-        remaining = get_tickets(user_id)
-        balance = get_balance(user_id)
+        remaining = get_tickets(
+            user_id
+        )
+
+        balance = get_balance(
+            user_id
+        )
 
         await interaction.response.send_message(
             f"🎰 **抽獎結果**\n\n"
@@ -658,6 +831,10 @@ class LotteryView(discord.ui.View):
             f"💰 D 幣：**{balance:,} D**"
         )
 
+    # ======================================
+    # 十連抽
+    # ======================================
+
     @discord.ui.button(
         label="十連抽",
         emoji="🎰",
@@ -672,7 +849,9 @@ class LotteryView(discord.ui.View):
 
         user_id = interaction.user.id
 
-        if get_tickets(user_id) < 10:
+        if get_tickets(
+            user_id
+        ) < 10:
 
             await interaction.response.send_message(
                 "❌ 你需要至少 **10 張抽獎券**！",
@@ -681,7 +860,10 @@ class LotteryView(discord.ui.View):
 
             return
 
-        remove_tickets(user_id, 10)
+        remove_tickets(
+            user_id,
+            10
+        )
 
         results = []
 
@@ -689,20 +871,35 @@ class LotteryView(discord.ui.View):
 
             prize = draw_prize()
 
-            results.append(prize)
+            results.append(
+                prize
+            )
 
             give_prize(
                 user_id,
                 prize
             )
 
-        remaining = get_tickets(user_id)
-        balance = get_balance(user_id)
+        remaining = get_tickets(
+            user_id
+        )
 
-        message = "🎰 **十連抽結果**\n\n"
+        balance = get_balance(
+            user_id
+        )
 
-        for i, prize in enumerate(results, 1):
-            message += f"`{i}.` {prize}\n"
+        message = (
+            "🎰 **十連抽結果**\n\n"
+        )
+
+        for i, prize in enumerate(
+            results,
+            1
+        ):
+
+            message += (
+                f"`{i}.` {prize}\n"
+            )
 
         message += (
             f"\n👤 玩家：{interaction.user.mention}\n"
@@ -710,7 +907,9 @@ class LotteryView(discord.ui.View):
             f"💰 D 幣：**{balance:,} D**"
         )
 
-        await interaction.response.send_message(message)
+        await interaction.response.send_message(
+            message
+        )
 
         log_message = (
             f"🎰 **十連抽紀錄**\n"
@@ -720,15 +919,23 @@ class LotteryView(discord.ui.View):
             f"🎁 抽獎結果：\n"
         )
 
-        for i, prize in enumerate(results, 1):
-            log_message += f"`{i}.` {prize}\n"
+        for i, prize in enumerate(
+            results,
+            1
+        ):
+
+            log_message += (
+                f"`{i}.` {prize}\n"
+            )
 
         log_message += (
             f"🎟️ 剩餘抽獎券：**{remaining}**\n"
             f"💰 D 幣：**{balance:,} D**"
         )
 
-        await send_log(log_message)
+        await send_log(
+            log_message
+        )
 
 
 # ==========================================
@@ -743,21 +950,36 @@ async def lottery(
     interaction: discord.Interaction
 ):
 
-    if not interaction.user.guild_permissions.administrator:
+    # ======================================
+    # 檢查指定身分組
+    # ======================================
+
+    has_role = any(
+        role.id == LOTTERY_ROLE_ID
+        for role in interaction.user.roles
+    )
+
+    if not has_role:
 
         await interaction.response.send_message(
-            "❌ 只有管理員可以建立抽獎面板。",
+            "❌ 你沒有抽獎管理權限。",
             ephemeral=True
         )
 
         return
 
+    # ======================================
+    # 抽獎面板
+    # ======================================
+
     embed = discord.Embed(
         title="🎰 D 幣幸運抽獎",
         description=(
             "🎟️ 使用抽獎券參加\n\n"
+
             "🎟️ **單抽：1 張**\n"
             "🎰 **十連抽：10 張**\n\n"
+
             "💰 10 D — **60%**\n"
             "💰 110 D — **30%**\n"
             "💎 200 D — **9%**\n"
@@ -833,14 +1055,18 @@ async def pay(
 
         return
 
-    add_d(member.id, amount)
+    add_d(
+        member.id,
+        amount
+    )
 
     remaining = get_balance(
         interaction.user.id
     )
 
     await interaction.response.send_message(
-        f"✅ 已轉給 {member.mention} **{amount:,} D**\n"
+        f"✅ 已轉給 {member.mention} "
+        f"**{amount:,} D**\n"
         f"💰 剩餘：**{remaining:,} D**"
     )
 
@@ -866,19 +1092,25 @@ async def shop(
 
     message = (
         "🛒 **D 幣商店**\n\n"
+
         "🎁 **皮膚箱 ×1**\n"
         "💰 5,000 D\n"
         "代碼：`skinbox`\n\n"
+
         "🏆 **限定稱號**\n"
         "💰 10,000 D\n"
         "代碼：`title`\n\n"
+
         "💰 **有錢人身分組**\n"
         "💰 50,000 D\n"
         "代碼：`rich`\n\n"
+
         "使用 `/buy` 兌換。"
     )
 
-    await interaction.response.send_message(message)
+    await interaction.response.send_message(
+        message
+    )
 
 
 # ==========================================
