@@ -113,6 +113,12 @@ PRIZES = [
     ("👑 任意 1000 R 商品", 0.1)
 ]
 
+# 抽到這些獎項時，紀錄頻道會特別標註「中大獎」
+BIG_PRIZES = {
+    "🎁 皮膚箱 ×1",
+    "👑 任意 1000 R 商品",
+}
+
 LOTTERY_SINGLE_COST = 100
 LOTTERY_TEN_COST = 950
 
@@ -1044,11 +1050,17 @@ class LotteryView(
             f"👤 玩家：{interaction.user.mention}\n"
             f"💸 花費：**{LOTTERY_SINGLE_COST} D**\n"
             f"🎁 結果：**{prize}**\n\n"
-            f"💰 D 幣：**{balance_amount:,} D**"
+            f"💰 D 幣：**{balance_amount:,} D**",
+            ephemeral=True
+        )
+
+        big_win_tag = (
+            "🎉🎉 **中大獎！** 🎉🎉\n" if prize in BIG_PRIZES else ""
         )
 
         await send_log(
             f"🎰 **單抽紀錄**\n"
+            f"{big_win_tag}"
             f"👤 玩家：{interaction.user.mention}\n"
             f"🆔 玩家 ID：`{user_id}`\n"
             f"💸 花費：**{LOTTERY_SINGLE_COST} D**\n"
@@ -1126,11 +1138,21 @@ class LotteryView(
         )
 
         await interaction.response.send_message(
-            message
+            message,
+            ephemeral=True
+        )
+
+        has_big_win = any(
+            prize in BIG_PRIZES for prize in results
+        )
+
+        big_win_tag = (
+            "🎉🎉 **中大獎！** 🎉🎉\n" if has_big_win else ""
         )
 
         log_message = (
             f"🎰 **十連抽紀錄**\n"
+            f"{big_win_tag}"
             f"👤 玩家：{interaction.user.mention}\n"
             f"🆔 玩家 ID：`{user_id}`\n"
             f"💸 花費：**{LOTTERY_TEN_COST} D**\n"
@@ -1142,8 +1164,10 @@ class LotteryView(
             1
         ):
 
+            tag = " 🎉" if prize in BIG_PRIZES else ""
+
             log_message += (
-                f"`{i}.` {prize}\n"
+                f"`{i}.` {prize}{tag}\n"
             )
 
         log_message += (
