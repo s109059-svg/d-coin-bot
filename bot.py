@@ -49,6 +49,54 @@ SHOP_ITEMS = {
     "rich": {
         "name": "💰 有錢人身分組",
         "price": 50000
+    },
+
+    # ======================================
+    # Rivals 熱門通行證（原價 x10）
+    # ======================================
+    "rivals_starter": {
+        "name": "🔫 [Rivals] 新手武器箱通行證",
+        "price": 490       # 原價 49 R
+    },
+    "rivals_classic": {
+        "name": "🔫 [Rivals] 經典武器組合",
+        "price": 8650      # 原價 865 R
+    },
+    "rivals_energy": {
+        "name": "⚡ [Rivals] 能量組合包",
+        "price": 3990      # 原價約 399 R
+    },
+    "rivals_prime": {
+        "name": "👑 [Rivals] Prime 賽季通行證",
+        "price": 5990      # 原價約 599 R
+    },
+
+    # ======================================
+    # Blox Fruits 熱門通行證（原價 x10）
+    # ======================================
+    "bf_fruitnotifier": {
+        "name": "🍈 [Blox Fruits] 果實通知器",
+        "price": 6000      # 原價約 600 R
+    },
+    "bf_2xmastery": {
+        "name": "⚔️ [Blox Fruits] 2倍 精通值",
+        "price": 6900      # 原價約 690 R
+    },
+    "bf_2xmoney": {
+        "name": "💵 [Blox Fruits] 2倍 金錢",
+        "price": 6900      # 原價約 690 R
+    },
+    "bf_fastboats": {
+        "name": "🚤 [Blox Fruits] 極速船隻",
+        "price": 6900      # 原價約 690 R
+    },
+    "bf_darkblade": {
+        "name": "🗡️ [Blox Fruits] 黑刀（Dark Blade）",
+        "price": 12000     # 原價約 1200 R
+    },
+    "bf_fullgamepass": {
+        "name": "💎 [Blox Fruits] 全通行證套組",
+        "price": 55000     # 原價約 5500 R
     }
 }
 
@@ -3040,26 +3088,51 @@ async def shop(
 
         return
 
-    message = (
-        "🛒 **D 幣商店**\n\n"
+    embed = discord.Embed(
+        title="🛒 D 幣商店",
+        description="使用 `/buy` 指令搭配代碼兌換商品。"
+    )
 
-        "🎁 **皮膚箱 ×1**\n"
-        "💰 5,000 D\n"
-        "代碼：`skinbox`\n\n"
+    general_lines = []
+    rivals_lines = []
+    bf_lines = []
 
-        "🏆 **限定稱號**\n"
-        "💰 10,000 D\n"
-        "代碼：`title`\n\n"
+    for code, item in SHOP_ITEMS.items():
 
-        "💰 **有錢人身分組**\n"
-        "💰 50,000 D\n"
-        "代碼：`rich`\n\n"
+        line = f"**{item['name']}**\n💰 {item['price']:,} D　代碼：`{code}`"
 
-        "使用 `/buy` 兌換。"
+        if code.startswith("rivals_"):
+
+            rivals_lines.append(line)
+
+        elif code.startswith("bf_"):
+
+            bf_lines.append(line)
+
+        else:
+
+            general_lines.append(line)
+
+    embed.add_field(
+        name="🎁 一般商品",
+        value="\n\n".join(general_lines),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🔫 Rivals 通行證",
+        value="\n\n".join(rivals_lines),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🍈 Blox Fruits 通行證",
+        value="\n\n".join(bf_lines),
+        inline=False
     )
 
     await interaction.response.send_message(
-        message
+        embed=embed
     )
 
 
@@ -3067,13 +3140,37 @@ async def shop(
 # /buy
 # ==========================================
 
+async def buy_item_autocomplete(
+    interaction: discord.Interaction,
+    current: str
+):
+
+    choices = []
+
+    for code, product in SHOP_ITEMS.items():
+
+        display = f"{product['name']} - {product['price']:,} D"
+
+        if current.lower() in code.lower() or current.lower() in product["name"].lower():
+
+            choices.append(
+                app_commands.Choice(
+                    name=display[:100],
+                    value=code
+                )
+            )
+
+    return choices[:25]
+
+
 @bot.tree.command(
     name="buy",
     description="使用 D 幣兌換固定獎勵"
 )
 @app_commands.describe(
-    item="商品代碼：skinbox / title / rich"
+    item="商品代碼（可用 /shop 查詢，例如：skinbox、rivals_starter、bf_darkblade）"
 )
+@app_commands.autocomplete(item=buy_item_autocomplete)
 async def buy(
     interaction: discord.Interaction,
     item: str
@@ -3092,9 +3189,14 @@ async def buy(
 
     if item not in SHOP_ITEMS:
 
+        available_codes = "、".join(
+            f"`{code}`" for code in SHOP_ITEMS.keys()
+        )
+
         await interaction.response.send_message(
-            "❌ 找不到商品。\n"
-            "可用：`skinbox`、`title`、`rich`",
+            f"❌ 找不到商品。\n"
+            f"可用代碼：{available_codes}\n"
+            f"也可以先用 `/shop` 查看完整清單。",
             ephemeral=True
         )
 
