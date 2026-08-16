@@ -2,6 +2,8 @@ import os
 import json
 import random
 from datetime import datetime, timezone, timedelta
+from itertools import combinations
+from collections import Counter
 
 import discord
 from discord import app_commands
@@ -153,7 +155,11 @@ MINES_MIN_BET = 100
 MINES_MAX_BET = 10000
 
 MINES_GRID_SIZE = 5
-MINES_TOTAL_CELLS = MINES_GRID_SIZE * MINES_GRID_SIZE
+
+# Discord 一個 View 最多 25 個元件（5 排 x 5 個）
+# 5x5 = 25 格會用滿，沒有位置放兌現按鈕
+# 所以地雷格用 24 格，最後一排空出的第 5 格放「兌現」按鈕
+MINES_TOTAL_CELLS = (MINES_GRID_SIZE * MINES_GRID_SIZE) - 1
 MINES_MIN_BOMBS = 5
 
 # 依炸彈數量對應「安全格獎勵倍率」（每翻開一格安全格增加的倍率）
@@ -169,6 +175,79 @@ MINES_BOMB_MULTIPLIER = {
     15: 2.10,
     18: 2.60,
     20: 3.20,
+}
+
+
+# ==========================================
+# Limbo（自訂倍率）設定
+# ==========================================
+
+LIMBO_MIN_BET = 100
+LIMBO_MAX_BET = 10000
+
+LIMBO_MIN_TARGET = 1.01
+LIMBO_MAX_TARGET = 1000.0
+
+# 抽水（house edge），數字越小玩家越有利，0.02 = 2%
+LIMBO_HOUSE_EDGE = 0.02
+
+
+# ==========================================
+# 比大小（撲克牌）設定
+# ==========================================
+
+HIGHLOW_MIN_BET = 100
+HIGHLOW_MAX_BET = 10000
+
+CARD_RANKS = [
+    ("A", 1), ("2", 2), ("3", 3), ("4", 4),
+    ("5", 5), ("6", 6), ("7", 7), ("8", 8),
+    ("9", 9), ("10", 10), ("J", 11),
+    ("Q", 12), ("K", 13)
+]
+
+CARD_SUITS = ["♠️", "♥️", "♦️", "♣️"]
+
+
+# ==========================================
+# 德州撲克（Casino Hold'em 玩法）設定
+# ==========================================
+# 玩法：下 ante 注 -> 看 2 張手牌 -> 跟注(2倍) 或 棄牌
+#      -> 跟注後開 5 張公牌 -> 比大小
+# 莊家需至少「一對」才算「有資格」，沒資格時 ante 算玩家贏，跟注金額退回
+
+HOLDEM_MIN_ANTE = 100
+HOLDEM_MAX_ANTE = 5000
+
+HOLDEM_CALL_MULTIPLIER = 2  # 跟注金額 = ante x 2
+
+POKER_RANK_NAMES = {
+    11: "J", 12: "Q", 13: "K", 14: "A"
+}
+
+POKER_HAND_NAMES = {
+    0: "高牌",
+    1: "一對",
+    2: "兩對",
+    3: "三條",
+    4: "順子",
+    5: "同花",
+    6: "葫蘆",
+    7: "鐵支",
+    8: "同花順",
+}
+
+# 跟注賠率（依最終牌型），皇家同花順另外特判為 100 倍
+POKER_CALL_PAYOUT = {
+    0: 1,
+    1: 1,
+    2: 2,
+    3: 3,
+    4: 4,
+    5: 5,
+    6: 7,
+    7: 20,
+    8: 50,
 }
 
 
@@ -1645,7 +1724,7 @@ class MinesView(discord.ui.View):
         self.cashout_button = discord.ui.Button(
             label="💰 兌現",
             style=discord.ButtonStyle.success,
-            row=MINES_GRID_SIZE,
+            row=MINES_GRID_SIZE - 1,
             custom_id="mine_cashout"
         )
 
@@ -2012,6 +2091,842 @@ async def mines(
         f"🆔 玩家 ID：`{user_id}`\n"
         f"🧨 炸彈數量：**{bombs} 顆**\n"
         f"💸 下注：**{amount:,} D**"
+    )
+
+
+# ==========================================
+# /limbo 自訂倍率
+# ==========================================
+
+@bot.tree.command(
+    name="limbo",
+    description="Limbo：自訂目標倍率，倍率越高中獎機率越低"
+)
+@app_commands.describe(
+    amount="下注金額（最少 100，最多 10000）",
+    target="目標倍率（最少 1.01，最多 1000）"
+)
+async def limbo(
+    interaction: discord.Interaction,
+    amount: int,
+    target: float
+):
+
+    user_id = interaction.user.id
+
+    if amount < LIMBO_MIN_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{LIMBO_MIN_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount > LIMBO_MAX_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{LIMBO_MAX_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if target < LIMBO_MIN_TARGET:
+
+        await interaction.response.send_message(
+            f"❌ 目標倍率最少 **{LIMBO_MIN_TARGET}x**。",
+            ephemeral=True
+        )
+
+        return
+
+    if target > LIMBO_MAX_TARGET:
+
+        await interaction.response.send_message(
+            f"❌ 目標倍率最多 **{LIMBO_MAX_TARGET}x**。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(
+        user_id,
+        amount
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    # ======================================
+    # 產生結果倍率
+    # ======================================
+
+    roll = random.uniform(0.0001, 1.0)
+
+    result_multiplier = (1 - LIMBO_HOUSE_EDGE) / roll
+
+    win_chance = (
+        (1 - LIMBO_HOUSE_EDGE) / target
+    ) * 100
+
+    win = result_multiplier >= target
+
+    if win:
+
+        payout = int(amount * target)
+
+        add_d(
+            user_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🚀 **Limbo 結果**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎯 目標倍率：**x{target:.2f}**（勝率約 {win_chance:.2f}%）\n"
+            f"🎲 開出倍率：**x{min(result_multiplier, 9999):.2f}**\n\n"
+            f"🎉 **中了！獲得 {payout:,} D！**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🚀 **Limbo 紀錄（贏）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎯 目標：x{target:.2f}　🎲 開出：x{min(result_multiplier, 9999):.2f}\n"
+            f"💰 獲得：**{payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    else:
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🚀 **Limbo 結果**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎯 目標倍率：**x{target:.2f}**（勝率約 {win_chance:.2f}%）\n"
+            f"🎲 開出倍率：**x{min(result_multiplier, 9999):.2f}**\n\n"
+            f"💔 **沒中！輸掉 {amount:,} D**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🚀 **Limbo 紀錄（輸）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎯 目標：x{target:.2f}　🎲 開出：x{min(result_multiplier, 9999):.2f}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+
+# ==========================================
+# /highlow 比大小（撲克牌）
+# ==========================================
+
+def draw_random_card():
+
+    rank_name, rank_value = random.choice(CARD_RANKS)
+    suit = random.choice(CARD_SUITS)
+
+    return rank_name, rank_value, suit
+
+
+@bot.tree.command(
+    name="highlow",
+    description="比大小：猜下一張牌比較大還比較小，猜對兩倍"
+)
+@app_commands.describe(
+    amount="下注金額（最少 100，最多 10000）",
+    guess="猜下一張牌比較大還是比較小"
+)
+@app_commands.choices(
+    guess=[
+        app_commands.Choice(name="比較大", value="higher"),
+        app_commands.Choice(name="比較小", value="lower"),
+    ]
+)
+async def highlow(
+    interaction: discord.Interaction,
+    amount: int,
+    guess: app_commands.Choice[str]
+):
+
+    user_id = interaction.user.id
+
+    if amount < HIGHLOW_MIN_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{HIGHLOW_MIN_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if amount > HIGHLOW_MAX_BET:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{HIGHLOW_MAX_BET} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if not remove_d(
+        user_id,
+        amount
+    ):
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    first_name, first_value, first_suit = draw_random_card()
+    second_name, second_value, second_suit = draw_random_card()
+
+    first_text = f"{first_suit}{first_name}"
+    second_text = f"{second_suit}{second_name}"
+
+    guess_text = "📈 比較大" if guess.value == "higher" else "📉 比較小"
+
+    # ======================================
+    # 判定結果
+    # ======================================
+
+    if second_value == first_value:
+
+        # 平手，退回本金
+        add_d(
+            user_id,
+            amount
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🃏 **比大小結果**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎴 第一張：**{first_text}**\n"
+            f"🎴 第二張：**{second_text}**\n"
+            f"🎯 你猜：{guess_text}\n\n"
+            f"🤝 **點數相同！退回下注金額**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🃏 **比大小紀錄（平手）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**（已退回）\n"
+            f"🎴 {first_text} → {second_text}　🎯 猜：{guess_text}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+        return
+
+    actual_result = "higher" if second_value > first_value else "lower"
+
+    win = (actual_result == guess.value)
+
+    if win:
+
+        payout = amount * 2
+
+        add_d(
+            user_id,
+            payout
+        )
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🃏 **比大小結果**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎴 第一張：**{first_text}**\n"
+            f"🎴 第二張：**{second_text}**\n"
+            f"🎯 你猜：{guess_text}\n\n"
+            f"🎉 **猜對了！獲得 {payout:,} D！**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🃏 **比大小紀錄（贏）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎴 {first_text} → {second_text}　🎯 猜：{guess_text}\n"
+            f"💰 獲得：**{payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    else:
+
+        balance_amount = get_balance(
+            user_id
+        )
+
+        await interaction.response.send_message(
+            f"🃏 **比大小結果**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎴 第一張：**{first_text}**\n"
+            f"🎴 第二張：**{second_text}**\n"
+            f"🎯 你猜：{guess_text}\n\n"
+            f"💔 **猜錯了！輸掉 {amount:,} D**\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await send_log(
+            f"🃏 **比大小紀錄（輸）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{user_id}`\n"
+            f"💸 下注：**{amount:,} D**\n"
+            f"🎴 {first_text} → {second_text}　🎯 猜：{guess_text}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+
+# ==========================================
+# 德州撲克：牌組與牌型評估
+# ==========================================
+
+def build_poker_deck():
+
+    deck = []
+
+    for value in range(2, 15):
+
+        for suit in CARD_SUITS:
+
+            deck.append((value, suit))
+
+    random.shuffle(deck)
+
+    return deck
+
+
+def poker_card_text(card):
+
+    value, suit = card
+
+    rank_text = POKER_RANK_NAMES.get(value, str(value))
+
+    return f"{suit}{rank_text}"
+
+
+def poker_cards_text(cards):
+
+    return " ".join(
+        poker_card_text(c) for c in cards
+    )
+
+
+def evaluate_5(cards):
+
+    """回傳可比較大小的 tuple：(牌型類別, 比較用數值們)"""
+
+    ranks = sorted(
+        [c[0] for c in cards],
+        reverse=True
+    )
+
+    suits = [c[1] for c in cards]
+
+    is_flush = len(set(suits)) == 1
+
+    unique_ranks = sorted(
+        set(ranks),
+        reverse=True
+    )
+
+    is_straight = False
+    straight_high = None
+
+    if len(unique_ranks) >= 5:
+
+        for i in range(len(unique_ranks) - 4):
+
+            window = unique_ranks[i:i + 5]
+
+            if window[0] - window[4] == 4:
+
+                is_straight = True
+                straight_high = window[0]
+
+                break
+
+    # A-2-3-4-5 (輪子)
+    if not is_straight and {14, 2, 3, 4, 5}.issubset(set(unique_ranks)):
+
+        is_straight = True
+        straight_high = 5
+
+    counts = Counter(ranks)
+
+    count_items = sorted(
+        counts.items(),
+        key=lambda x: (-x[1], -x[0])
+    )
+
+    count_pattern = [c for _, c in count_items]
+
+    if is_straight and is_flush:
+
+        return (8, (straight_high,))
+
+    if count_pattern[0] == 4:
+
+        four_rank = count_items[0][0]
+
+        kicker = max(
+            r for r in ranks if r != four_rank
+        )
+
+        return (7, (four_rank, kicker))
+
+    if count_pattern[0] == 3 and count_pattern[1] >= 2:
+
+        three_rank = count_items[0][0]
+        pair_rank = count_items[1][0]
+
+        return (6, (three_rank, pair_rank))
+
+    if is_flush:
+
+        return (5, tuple(sorted(ranks, reverse=True)))
+
+    if is_straight:
+
+        return (4, (straight_high,))
+
+    if count_pattern[0] == 3:
+
+        three_rank = count_items[0][0]
+
+        kickers = sorted(
+            [r for r in ranks if r != three_rank],
+            reverse=True
+        )
+
+        return (3, (three_rank,) + tuple(kickers))
+
+    if count_pattern[0] == 2 and count_pattern[1] == 2:
+
+        pairs = sorted(
+            [count_items[0][0], count_items[1][0]],
+            reverse=True
+        )
+
+        kicker = max(
+            r for r in ranks if r not in pairs
+        )
+
+        return (2, tuple(pairs) + (kicker,))
+
+    if count_pattern[0] == 2:
+
+        pair_rank = count_items[0][0]
+
+        kickers = sorted(
+            [r for r in ranks if r != pair_rank],
+            reverse=True
+        )
+
+        return (1, (pair_rank,) + tuple(kickers))
+
+    return (0, tuple(sorted(ranks, reverse=True)))
+
+
+def evaluate_best_of_7(cards7):
+
+    best = None
+
+    for combo in combinations(cards7, 5):
+
+        score = evaluate_5(list(combo))
+
+        if best is None or score > best:
+
+            best = score
+
+    return best
+
+
+def get_hand_name(score):
+
+    category, tiebreak = score
+
+    if category == 8 and tiebreak[0] == 14:
+
+        return "皇家同花順"
+
+    return POKER_HAND_NAMES[category]
+
+
+def get_call_multiplier(score):
+
+    category, tiebreak = score
+
+    if category == 8 and tiebreak[0] == 14:
+
+        return 100
+
+    return POKER_CALL_PAYOUT[category]
+
+
+# ==========================================
+# 德州撲克互動面板
+# ==========================================
+
+class HoldemView(discord.ui.View):
+
+    def __init__(
+        self,
+        owner_id: int,
+        ante: int,
+        player_hole,
+        dealer_hole,
+        community
+    ):
+
+        super().__init__(timeout=60)
+
+        self.owner_id = owner_id
+        self.ante = ante
+        self.player_hole = player_hole
+        self.dealer_hole = dealer_hole
+        self.community = community
+        self.resolved = False
+
+        self.call_button = discord.ui.Button(
+            label=f"✅ 跟注 ({ante * HOLDEM_CALL_MULTIPLIER} D)",
+            style=discord.ButtonStyle.success,
+            custom_id="holdem_call"
+        )
+
+        self.fold_button = discord.ui.Button(
+            label="❌ 棄牌",
+            style=discord.ButtonStyle.danger,
+            custom_id="holdem_fold"
+        )
+
+        self.call_button.callback = self.call_callback
+        self.fold_button.callback = self.fold_callback
+
+        self.add_item(self.call_button)
+        self.add_item(self.fold_button)
+
+    async def call_callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.owner_id:
+
+            await interaction.response.send_message(
+                "❌ 這不是你的牌局。",
+                ephemeral=True
+            )
+
+            return
+
+        if self.resolved:
+
+            return
+
+        call_amount = self.ante * HOLDEM_CALL_MULTIPLIER
+
+        if not remove_d(
+            self.owner_id,
+            call_amount
+        ):
+
+            await interaction.response.send_message(
+                f"❌ D 幣不足，無法跟注！需要 **{call_amount:,} D**\n"
+                f"目前：**{get_balance(self.owner_id):,} D**",
+                ephemeral=True
+            )
+
+            return
+
+        self.resolved = True
+
+        for item in self.children:
+
+            item.disabled = True
+
+        player_score = evaluate_best_of_7(
+            self.player_hole + self.community
+        )
+
+        dealer_score = evaluate_best_of_7(
+            self.dealer_hole + self.community
+        )
+
+        player_hand_name = get_hand_name(player_score)
+        dealer_hand_name = get_hand_name(dealer_score)
+
+        dealer_qualified = dealer_score[0] >= 1
+
+        # ======================================
+        # 結算
+        # ======================================
+
+        if not dealer_qualified:
+
+            # 莊家沒資格：ante 算贏(1:1)，跟注退回
+            ante_payout = self.ante * 2
+            call_refund = call_amount
+
+            total_payout = ante_payout + call_refund
+
+            add_d(
+                self.owner_id,
+                total_payout
+            )
+
+            result_text = (
+                f"🏦 **莊家沒有資格（未達一對）**\n"
+                f"💰 Ante 算贏：**{ante_payout:,} D**\n"
+                f"↩️ 跟注退回：**{call_refund:,} D**"
+            )
+
+        elif player_score > dealer_score:
+
+            multiplier = get_call_multiplier(player_score)
+
+            ante_payout = self.ante * 2
+            call_payout = call_amount * multiplier
+
+            total_payout = ante_payout + call_payout
+
+            add_d(
+                self.owner_id,
+                total_payout
+            )
+
+            result_text = (
+                f"🎉 **你贏了！**\n"
+                f"💰 Ante 賠付：**{ante_payout:,} D**\n"
+                f"💰 跟注賠付（{player_hand_name} x{multiplier}）：**{call_payout:,} D**"
+            )
+
+        elif player_score < dealer_score:
+
+            total_payout = 0
+
+            result_text = (
+                f"💔 **莊家贏了！**\n"
+                f"損失 Ante + 跟注共：**{self.ante + call_amount:,} D**"
+            )
+
+        else:
+
+            total_payout = self.ante + call_amount
+
+            add_d(
+                self.owner_id,
+                total_payout
+            )
+
+            result_text = (
+                f"🤝 **平手！退回全部下注**\n"
+                f"退回：**{total_payout:,} D**"
+            )
+
+        balance_amount = get_balance(
+            self.owner_id
+        )
+
+        content = (
+            f"🃏 **德州撲克 - 結算**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎴 你的手牌：**{poker_cards_text(self.player_hole)}**\n"
+            f"🎴 莊家手牌：**{poker_cards_text(self.dealer_hole)}**\n"
+            f"🃏 公共牌：**{poker_cards_text(self.community)}**\n\n"
+            f"🙋 你的牌型：**{player_hand_name}**\n"
+            f"🏦 莊家牌型：**{dealer_hand_name}**\n\n"
+            f"{result_text}\n\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await interaction.response.edit_message(
+            content=content,
+            view=self
+        )
+
+        await send_log(
+            f"🃏 **德州撲克紀錄**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{self.owner_id}`\n"
+            f"💸 Ante：**{self.ante:,} D**　跟注：**{call_amount:,} D**\n"
+            f"🎴 玩家：{poker_cards_text(self.player_hole)}（{player_hand_name}）\n"
+            f"🏦 莊家：{poker_cards_text(self.dealer_hole)}（{dealer_hand_name}）\n"
+            f"🃏 公共牌：{poker_cards_text(self.community)}\n"
+            f"💰 結算獲得：**{total_payout:,} D**\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    async def fold_callback(self, interaction: discord.Interaction):
+
+        if interaction.user.id != self.owner_id:
+
+            await interaction.response.send_message(
+                "❌ 這不是你的牌局。",
+                ephemeral=True
+            )
+
+            return
+
+        if self.resolved:
+
+            return
+
+        self.resolved = True
+
+        for item in self.children:
+
+            item.disabled = True
+
+        balance_amount = get_balance(
+            self.owner_id
+        )
+
+        content = (
+            f"🃏 **德州撲克 - 棄牌**\n\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🎴 你的手牌：**{poker_cards_text(self.player_hole)}**\n\n"
+            f"💔 **已棄牌，損失 Ante：{self.ante:,} D**\n\n"
+            f"💰 D 幣：**{balance_amount:,} D**"
+        )
+
+        await interaction.response.edit_message(
+            content=content,
+            view=self
+        )
+
+        await send_log(
+            f"🃏 **德州撲克紀錄（棄牌）**\n"
+            f"👤 玩家：{interaction.user.mention}\n"
+            f"🆔 玩家 ID：`{self.owner_id}`\n"
+            f"💸 Ante：**{self.ante:,} D**（已損失）\n"
+            f"🎴 玩家：{poker_cards_text(self.player_hole)}\n"
+            f"💰 餘額：**{balance_amount:,} D**"
+        )
+
+    async def on_timeout(self):
+
+        # 逾時視同棄牌，但不額外扣款（ante 已在開局時扣除）
+        self.resolved = True
+
+        for item in self.children:
+
+            item.disabled = True
+
+
+# ==========================================
+# /holdem 德州撲克
+# ==========================================
+
+@bot.tree.command(
+    name="holdem",
+    description="德州撲克：下 Ante，看手牌後決定跟注或棄牌，跟注後比大小"
+)
+@app_commands.describe(
+    ante="底注金額（最少 100，最多 5000，跟注會是 2 倍）"
+)
+async def holdem(
+    interaction: discord.Interaction,
+    ante: int
+):
+
+    user_id = interaction.user.id
+
+    if ante < HOLDEM_MIN_ANTE:
+
+        await interaction.response.send_message(
+            f"❌ 最少下注 **{HOLDEM_MIN_ANTE} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    if ante > HOLDEM_MAX_ANTE:
+
+        await interaction.response.send_message(
+            f"❌ 最多下注 **{HOLDEM_MAX_ANTE} D**。",
+            ephemeral=True
+        )
+
+        return
+
+    call_amount = ante * HOLDEM_CALL_MULTIPLIER
+
+    # 先確認玩家有足夠餘額支付 ante + 之後可能的跟注，避免玩到一半跟不起
+    if get_balance(user_id) < ante + call_amount:
+
+        await interaction.response.send_message(
+            f"❌ D 幣不足！需準備 Ante + 跟注共 **{ante + call_amount:,} D**\n"
+            f"目前：**{get_balance(user_id):,} D**",
+            ephemeral=True
+        )
+
+        return
+
+    remove_d(
+        user_id,
+        ante
+    )
+
+    deck = build_poker_deck()
+
+    player_hole = [deck.pop(), deck.pop()]
+    dealer_hole = [deck.pop(), deck.pop()]
+    community = [deck.pop() for _ in range(5)]
+
+    view = HoldemView(
+        owner_id=user_id,
+        ante=ante,
+        player_hole=player_hole,
+        dealer_hole=dealer_hole,
+        community=community
+    )
+
+    await interaction.response.send_message(
+        f"🃏 **德州撲克開局！**\n\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"💸 Ante：**{ante:,} D**\n"
+        f"🎴 你的手牌：**{poker_cards_text(player_hole)}**\n\n"
+        f"跟注需要再付 **{call_amount:,} D**，之後會開出 5 張公共牌比大小。\n"
+        f"莊家沒有至少「一對」時不算數，Ante 直接算你贏。\n\n"
+        f"請選擇要跟注還是棄牌（60 秒內）：",
+        view=view
+    )
+
+    await send_log(
+        f"🃏 **德州撲克開局**\n"
+        f"👤 玩家：{interaction.user.mention}\n"
+        f"🆔 玩家 ID：`{user_id}`\n"
+        f"💸 Ante：**{ante:,} D**\n"
+        f"🎴 手牌：{poker_cards_text(player_hole)}"
     )
 
 
